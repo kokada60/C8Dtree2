@@ -1,10 +1,16 @@
-# install.packages("tidyverse")
-# install.packages("mlr") 
-# install.packages("data.table")
+install.packages("tidyverse")
+install.packages("mlr")
+install.packages("data.table")
+install.packages("rpart.plot")
 
 library(tidyverse)
 library(mlr)
 library(data.table) 
+library(parallel)
+library(parallelMap)
+library(rpart)
+library(rpart.plot)
+
 
 data(Zoo, package="mlbench")
 zooTib <- as_tibble(Zoo)
@@ -36,8 +42,32 @@ summary(dtZoo) # first glance at each feature. [venomous] only has 8 cases. Is t
                # Another fact is that each class particularly for reptil, amphibian, and insect, has very low few cases. 
 
 randSearch <- makeTuneControlRandom(maxit=200) 
-cvForTuning <- makeResampleDesc(method="CV", stratify=TRUE, iters=5)
+cvForTuning <- makeResampleDesc(method="CV", stratify=FALSE, iters=5)
 
-library(parallel)
-library(parallelMap)
+## tuning param space
+parallelStartSocket(cpus=detectCores())
+tunedTreeParams <- tuneParams(learner=tree, task=zooTask, resampling=cvForTuning, par.set=treeParamSpace, control=randSearch)
+parallelStop()
+
+tunedTreeParams
+
+# Build model with the tuned hyper parameters...
+  # tuned Tree Learner
+tunedTree <- setHyperPars(learner=tree, par.vals=tunedTreeParams$x)
+  # train model with tuned params.
+tunedTreeModel <- train(learner=tunedTree, zooTask)
+treeModelData <- getLearnerModel(tunedTreeModel)
+
+# Cross Validating the newly created model...
+outer <- makeResampleDesc(method="CV", iters=5)
+treeWrapper <- makeTuneWrapper(learner="classif.rpart", resampling=cvForTuning, par.set=treeParamSpace, control=randSearch)
+parallelStartSocket(cpus=detectCores())
+cvWithTuning <- resample(treeWrapper, zooTask, resampling=outer)
+parallelStop()
+
+dtZoo[type=="amphibian",]
+
+
+
+rpart.plot(treeModelData, roundint=FALSE, box.palette="BuBn", type=5)
 
