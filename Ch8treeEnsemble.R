@@ -1,6 +1,6 @@
-install.packages("tidyverse")
-install.packages("mlr") 
-install.packages("data.table")
+# install.packages("tidyverse")
+# install.packages("mlr") 
+# install.packages("data.table")
 
 library(tidyverse)
 library(mlr)
@@ -11,12 +11,14 @@ zooTib <- as_tibble(Zoo)
 zooTib
 glimpse(zooTib)
 
-zooTib %>% mutate_if(is.logical, as.factor) %>% glimpse() -> zooTib
+zooTib <- mutate_if(zooTib, is.logical, as.factor)
 glimpse(zooTib)
 
 ## create classification task obj and a learner with rpart...
-zooTask <- makeClassifTask(data = zooTib, target="type") 
-tree <- makeLearner("classif.rpart")
+
+zooTask <- makeClassifTask(data=zooTib, target="type")
+tree <- makeLearner(cl="classif.rpart")
+tree
 
 ## First thing is to create hyper parameter space, in order to tune, and to crossvalidate. 
 getParamSet(tree) 
@@ -33,7 +35,7 @@ dtZoo<-zooTib %>% data.table()
 summary(dtZoo) # first glance at each feature. [venomous] only has 8 cases. Is this enough to stratify for 7 classes? (mammal, bird, reptile, etc.)
                # Another fact is that each class particularly for reptil, amphibian, and insect, has very low few cases. 
 
-randSearch <- makeTuneControlRandom(maxit=200)
+randSearch <- makeTuneControlRandom(maxit=200) 
 cvForTuning <- makeResampleDesc(method="CV", stratify=TRUE, iters=5)
 
 library(parallel)
