@@ -33,6 +33,9 @@ dtZoo<-zooTib %>% data.table()
 summary(dtZoo) # first glance at each feature. [venomous] only has 8 cases. Is this enough to stratify for 7 classes? (mammal, bird, reptile, etc.)
                # Another fact is that each class particularly for reptil, amphibian, and insect, has very low few cases. 
 
-makeTuneControlRandom()
+randSearch <- makeTuneControlRandom(maxit=200)
+cvForTuning <- makeResampleDesc(method="CV", stratify=TRUE, iters=5)
 
+library(parallel)
+library(parallelMap)
 
