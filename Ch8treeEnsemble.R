@@ -41,12 +41,12 @@ dtZoo<-zooTib %>% data.table()
 summary(dtZoo) # first glance at each feature. [venomous] only has 8 cases. Is this enough to stratify for 7 classes? (mammal, bird, reptile, etc.)
                # Another fact is that each class particularly for reptil, amphibian, and insect, has very low few cases. 
 
-randSearch <- makeTuneControlRandom(maxit=200) 
-cvForTuning <- makeResampleDesc(method="CV", stratify=FALSE, iters=5)
+randSearch <- makeTuneControlRandom(maxit=200)
+cvFOrTuning <- makeResampleDesc(method="CV", stratify=FALSE, iters=5)
 
 ## tuning param space
 parallelStartSocket(cpus=detectCores())
-tunedTreeParams <- tuneParams(learner=tree, task=zooTask, resampling=cvForTuning, par.set=treeParamSpace, control=randSearch)
+tunedTreeParams <- tuneParams(learner=tree, task=zooTask, resampling=cvFOrTuning, par.set=treeParamSpace, control=randSearch)
 parallelStop()
 
 tunedTreeParams
@@ -71,3 +71,38 @@ dtZoo[type=="amphibian",]
 
 rpart.plot(treeModelData, roundint=FALSE, box.palette="BuBn", type=5)
 
+
+data(Ozone, package="mlbench")
+ozoneTib <- as.tibble(Ozone)
+names(ozoneTib) <- c("Month", "Date", "Day", "Ozone", "Press_height", "Wind", "Humid", "Temp_Sand", "Temp_Monte", 
+                     "Inv_height", "Press_grad", "Inv_temp", "Visib")
+ozoneClean <- ozoneTib %>% mutate_if(is.factor, as.numeric) %>% filter(!is.na(Ozone))
+
+
+lin <- mlr::makeLearner("regr.lm")
+kFold <- makeResampleDesc(method="CV", iters=10)
+featSelControl <- makeFeatSelControlSequential(method="sfbs")
+imputeMethod <- imputeLearner("regr.rpart")
+imputeWrapper <- makeImputeWrapper(learner=lin, classes=list(numeric=imputeMethod))
+featSelWrapper <- makeFeatSelWrapper(learner=imputeWrapper, resampling=kFold, control=featSelControl)
+
+ozoneTaskWithNAs <- makeRegrTask(data=ozoneClean, target="Ozone")
+kFold3 <- makeResampleDesc("CV", iters = 3)
+
+parallelStartSocket(cpu=detectCores())
+lmCV <- resample(learner=featSelWrapper, task=ozoneTaskWithNAs, resampling=kFold3)
+parallelStop()
+lmCV 
+
+lmCV$task.desc
+
+
+wrapperModel <- train(featSelWrapper, ozoneSelFeatTask)
+
+
+
+
+
+wrapperModel <- train(featSelWrapper, task=ozoneTaskWithNAs)
+wrapperModelData <- getLearnerModel(wrapperModel)
+summary(wrapperModelData)
