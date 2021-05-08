@@ -67,9 +67,38 @@ parallelStop()
 
 dtZoo[type=="amphibian",]
 
-
-
+cvWithTuning$aggr
+treeModelData$y
 rpart.plot(treeModelData, roundint=FALSE, box.palette="BuBn", type=5)
+
+
+outer <- makeResampleDesc(method="CV", iters=5)
+parallelStartSocket(cpus=detectCores())
+cvtunedAlready <- resample(tunedTree, zooTask, resampling=outer)
+parallelStop()
+
+
+zooXgb <- 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 data(Ozone, package="mlbench")
