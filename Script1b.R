@@ -1,8 +1,10 @@
+
 library(parallel)
 library(parallelMap)
 library(tidyverse)
 library(dplyr)
 library(mlr)
+library(FSelector)
 
 # First filter out ozone records with NAs for target field. 
 data(Ozone, package="mlbench")
@@ -15,14 +17,18 @@ summary(ozoneTib)
 # In order to further cleaning the list, filter out records with NA for Ozone, the target variable, and also 
 #   to numericize factorial fields Month, Date, and Day. 
 map_dbl(ozoneTib, ~sum(is.na(.)))
+map_dbl(ozoneTib, ~sum(is.na(.)))
+
 check_isAnyValIsFactorial <- function(c) {
   any(is.factor(c))
 }
 check_isAnyValIsNA <- function(c) {
   any(is.na(c))
 }
+
+
 #ozoneClean <- mutate_all(data.frame(ozoneTib), as.numeric) %>% filter(is.na(Ozone)==FALSE) %>% as.tibble()
-ozoneClean <- mutate_if(ozoneTib, check_isAnyValIsFactorial, as.numeric) %>% filter(is.na(Ozone)==FALSE) %>% as.tibble()
+ozoneClean <- mutate_if(ozoneTib, check_isAnyValIsFactorial, as.numeric) %>% filter(is.na(Ozone)==FALSE) 
 check_isAnyValIsFactorial(ozoneTib[[2]])
 map_dbl(ozoneClean, ~sum(is.na(.)))
 glimpse(ozoneClean)
@@ -61,7 +67,6 @@ gather(ozoneImp$data, key="Variable", value="Value", -Ozone) %>%
   geom_smooth(method="lm", col="red") + 
   theme_bw()
 
-which(ozoneTib) 
 
 ozoneTask <- makeRegrTask(data=ozoneImp$data, target="Ozone")
 lin <- makeLearner("regr.lm")
@@ -79,6 +84,7 @@ plotFilterValues(filterVals) + theme_bw()
 plotFilterValues(filterValsRF) + theme_bw()
 plotFilterValues(filterValsRFSRC) + theme_bw()
 plotFilterValues(filterValsChiSq) + theme_bw()
+
 
 # Still continuing with Filter method of Feature Selection... Simply wrapping the filter method with a learner.
 filterWrapper = makeFilterWrapper(learner = lin, fw.method = "linear.correlation")
@@ -142,13 +148,123 @@ pd_CS_MSE <- (pd_CS$data$truth - pd_CS$data$response)^2 %>% mean()
 # Now the WRAPPER feature selection method... 
 ?FeatSelControl
 
+library(parallel)
+library(parallelMap)
+
 featSelControl <- makeFeatSelControlSequential(method="sfbs")
-selFeats <- selectFeatures(learner=lin, task=ozoneTask, resampling=makeResampleDesc(method="CV", iters=15), control = featSelControl)
+selFeats <- selectFeatures(learner=lin, 
+                           task=ozoneTask, 
+                           resampling=makeResampleDesc(method="CV", iters=10), 
+                           control = featSelControl)
 ozoneSelFeat <- ozoneImp$data[, c("Ozone", selFeats$x)]
 ozoneSelFeatTask <- makeRegrTask(data=ozoneSelFeat, target="Ozone")
 ozoneSelWrapperModel <- train(lin, ozoneSelFeatTask)
 pd_SelFeatWrapper <- predict(ozoneSelWrapperModel, newdata=ozoneImp$data)
 pd_SelFeatWrapper_MSE <- (pd_SelFeatWrapper$data$truth - pd_SelFeatWrapper$data$response) ^ 2 %>% mean()
+pd_SelFeatWrapper_MSE
+
+
+# Cross Validate all preprocessing in wrappers. 
+imputeWrapper <- makeImputeWrapper(
+                    learner=makeLearner("regr.lm"), 
+                    classes=list(numeric=imputeLearner("regr.rpart"))
+)
+featSelWrapper <- makeFeatSelWrapper(learner=imputeWrapper, 
+                                     resampling=kFold, 
+                                     control=makeFeatSelControlSequential(method="sfbs"))
+ozoneTaskWithNAs <- makeRegrTask(data=as.data.frame(ozoneClean), target="Ozone")
+kFold3 <- makeResampleDesc(method="CV", iters=3)
+parallelStartSocket(cpus=detectCores())
+lmCV_modelTRUE <- resample(learner=featSelWrapper, task=ozoneTaskWithNAs, resampling=kFold3, models=TRUE)
+parallelStop()
+
+
+
+parallelStartSocket(cpus=detectCores())
+lmCV_modelFALSE <- resample(learner=featSelWrapper, task=ozoneTaskWithNAs, resampling=kFold3, models=FALSE)
+parallelStop()
+
+wrapperModelData <- getLearnerModel(ozoneSelWrapperModel)
+ggplot(data=data.frame(rx=wrapperModelData$residuals), aes(x=rx)) + geom_histogram()
+summary(wrapperModelData)
+
+par(mfrow=c(2, 2))
+plot(wrapperModelData)
+wrapperModelData
+
+                    
+# Build CV resampling routine with filter feature selection instead of wrapper FS. 
+featSelWrapper_Filter <- makeFilterWrapper(learner=imputeWrapper, 
+                                           fw.method="linear.correlation")
+selFilterParamSpace <- makeParamSet(
+  makeIntegerParam(id="fw.abs", lower=1, upper=13)
+)
+gridSearch=
+parallelStartSocket(cpus=detectCores())
+tuneWrapper <- makeTuneWrapper(learner=featSelWrapper_Filter, par.set=selFilterParamSpace,
+                               resampling=kFold, 
+                               control=gridSearch)
+parallelStop()
+filterCV <- resample(tuneWrapper, resampling=kFold3, task=ozoneTaskWithNAs)
+filterCV
+pd_LM_MSE
+
+interaction(1:4, c("a", "b", "c", "d"))
+as.numeric(interaction(1:4, c("a", "b", "c", "d")))
+
+ozoneCleanForGAM <- mutate(ozoneClean, DayOfYear=as.numeric(interaction(Date, Month))) %>% select(c(-"Date", -"Month"))
+ggplot(ozoneCleanForGAM, aes(DayOfYear, Ozone)) + 
+  geom_point() + 
+  geom_smooth() + 
+  theme_bw() + 
+  geom_smooth(method="lm", formula="y ~ x+ I(x^2)", col="red")
+
+gamTask <- makeRegrTask(data=ozoneCleanForGAM, target="Ozone")
+imputeMethod <- imputeLearner("regr,rpart")
+gamImputeWrapper <- makeImputeWrapper(learner="regr.gamboost",
+                                      classes=list(numeric=imputeMethod))
+gamFeatureSelControl <- makeFeatSelControlSequential(method="sfbs")
+kFold <- makeResampleDesc("CV", iters=10)
+gamFeatSelWrapper <- makeFeatSelWrapper(learner=gamImputeWrapper, 
+                                        resampling=kFold, control=gamFeatureSelControl)
+holdOut <- makeResampleDesc("Holdout")
+parallelStartSocket(cpus=detectCores())
+gamCV <- resample(learner=gamFeatSelWrapper, task=gamTask, 
+                  resampling=holdOut)
+parallelStop()
+# Cross Validation of model building process. MSE of 19.14, a bit lower than LM. SO it's good. 
+gamCV
+
+parallelStartSocket(cpus=detectCores())
+gamBoostModel <- train(learner=gamFeatSelWrapper, task=gamTask)
+parallelStop()
+gamModelData <- getLearnerModel(gamBoostModel, more.unwrap=TRUE)
+
+par(mfrow=c(3, 3))
+plot(gamModelData, type="l")
+plot(gamModelData$fitted, resid(gamModelData))
+qqnorm(resid(gamModelData))
+qqline(resid(gamModelData))
+par(mfrow=c(1,1))
+
+gamParamSet <- makeParamSet(
+  makeIntegerParam("fw.abs", lower=1, upper=13)
+)
+gridSearch <- makeTuneControlGrid()
+gamFilterWrapper <- makeFilterWrapper(learner = gamImputeWrapper, fw.method = "linear.correlation")
+gamTuneWrapper <- makeTuneWrapper(learner=gamFilterWrapper, 
+                                  resampling=kFold, 
+                                  par.set=gamParamSet, 
+                                  control = gridSearch)
+parallelStartSocket(cpus=detectCores())
+filterGamCV1 <- resample(gamTuneWrapper, gamTask, resampling=kFold3)
+filterGamCV2 <- resample(gamTuneWrapper, gamTask, resampling=holdOut)
+parallelStop()
+
+
+
+
+
 
 
 
