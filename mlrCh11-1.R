@@ -65,3 +65,5 @@ tunedRidgeModel <- train(tunedRidgeLearner, task=iowaTask)
 tunedRidgeModelData <- getLearnerModel(tunedRidgeModel)
 ridgeCoefs <- coef(tunedRidgeModelData, s=tunedRidgeParams$x$s)
 View(ridgeCoefs)
+
+Now we hav 
