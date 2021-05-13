@@ -1,6 +1,8 @@
 library(mlr) 
 library(tidyverse)
 library(glmnet)
+library(tidytext)
+
 
 data(Iowa, package="lasso2")
 iowaTib <- as.tibble(Iowa)
@@ -55,6 +57,7 @@ ridgeTuneData <- generateHyperParsEffectData(tunedRidgeParams)
 plotHyperParsEffect(ridgeTuneData, x="s", y="mse.test.mean", plot.type="line") + theme_bw()
 
 # Now the best performing hyp-param lambda was apprx to 6, a model will be built on that premise.
+
 # First, take the ridgeLearner and set its hyper-parameter space to tunedRidgeParams, a returned object 
 #from parameter tuning from earlier. 
 tunedRidgeParams$learner$id
@@ -64,6 +67,110 @@ tunedRidgeLearner <- setHyperPars(learner=ridgeLearner, par.vals=tunedRidgeParam
 tunedRidgeModel <- train(tunedRidgeLearner, task=iowaTask)
 tunedRidgeModelData <- getLearnerModel(tunedRidgeModel)
 ridgeCoefs <- coef(tunedRidgeModelData, s=tunedRidgeParams$x$s)
+
 View(ridgeCoefs)
 
-Now we hav 
+#Now we have this model built, let's compare this side-by-side with unregularized lm OLS model. 
+lm_Model <- lm(formula=Yield ~ ., data=iowaTib)
+lmCoefs <- coef(lm_Model)
+
+coefTib <- tibble(Coef=rownames(ridgeCoefs)[-1], Ridge=as.vector(ridgeCoefs)[-1], Lm=as.vector(lmCoefs[-1]))
+coefUntidy <- gather(coefTib, key="Model", value=Beta, -Coef)
+# Plot the predictors of both models
+
+ggplot(coefUntidy, aes(x=Coef, y=Beta, fill=Model)) + 
+  geom_bar(stat="identity", col="black") + 
+  facet_wrap(~Model) + 
+  theme_bw() + 
+  theme(legend.position="none")
+
+coefUntidy
+coefUntidy %>% 
+  ggplot(aes(reorder(Coef, Beta), Beta, fill=Model)) + 
+  geom_bar(stat="identity", col="black") + 
+  facet_wrap(~Model) + 
+  
+  theme_bw() + 
+  theme(legend.position="none")
+
+lassoLearner <- makeLearner(cl="regr.glmnet", alpha=1, id="lasso")
+parallelStartSocket(cpus=detectCores())
+tunedLassoParms <- tuneParams(learner=lassoLearner, task=iowaTask, 
+                              par.set=ridgeParamSpace,
+                              resampling=makeResampleDesc(method="RepCV", folds=3, reps=15), 
+                              control=makeTuneControlRandom(maxit=200))
+parallelStop()
+lassoTuningData <- generateHyperParsEffectData(tunedLassoParms)
+plotHyperParsEffect(lassoTuningData, x="s", y="mse.test.mean", plot.type="line") + 
+  theme_bw()
+tunedLassoLearner <- setHyperPars(learner=lassoLearner, par.vals=tunedLassoParms$x)
+tunedLassoModel <- train(tunedLassoLearner, task=iowaTask)
+tunedLassoModelData <- getLearnerModel(tunedLassoModel)
+lassoCoefs <- coef(tunedLassoModelData, s=tunedLassoParms$x$s)
+lassoCoefs
+ridgeCoefs
+coefTib <- coefTib %>% mutate(Lasso=as.vector(lassoCoefs)[-1])
+coefUntidy <- coefTib %>% gather(key="Model", value="Beta", -Coef)
+ggplot(coefUntidy, aes(reorder(Coef, Beta), Beta, fill=Model)) + 
+  geom_bar(stat="identity", col="black") + 
+  facet_wrap(~Model) + 
+  theme_bw()
+
+#Now that the Lasso model is complete, now lets train an elastic net model. This 
+# will be done by including "Alpha" hyper param to the set of parameter to be tuned by cross validation. 
+elasticLearner <- makeLearner(cl="regr.glmnet", id="elastic") 
+elasticParamSet <- makeParamSet(
+  makeNumericParam(id="s", lower=0, upper=15), 
+  makeNumericParam(id="alpha", lower=0, upper=1)
+)
+randomSearch <- makeTuneControlRandom(maxit=400)
+repCV <- makeResampleDesc(method="RepCV", fold=3, reps=15)
+parallelStartSocket(cpus=detectCores())
+tunedElasticParams <- tuneParams(learner=elasticLearner, task=iowaTask, 
+                                 resampling=repCV, par.set=elasticParamSet, 
+                                 control=randomSearch)
+parallelStop()
+tunedElasticParamData <- generateHyperParsEffectData(tunedElasticParams)
+plotHyperParsEffect(tunedElasticParamData, x="s", y="alpha", z="mse.test.mean", 
+                    interpolate = "regr.kknn", 
+                    plot.type="heatmap",
+                    ) +
+  scale_fill_gradientn(colours=terrain.colors(5)) + 
+  geom_point(x=tunedElasticParams$x$s, y=tunedElasticParams$x$alpha, col="white") + 
+  theme_bw()
+
+
+plotHyperParsEffect(tunedElasticParamData, x="s", y="alpha", z="mse.test.mean", 
+                    interpolate = "regr.kknn", 
+                    plot.type="contour",
+                    show.experiments = TRUE) +
+  scale_fill_gradientn(colours=terrain.colors(5)) + 
+  geom_point(x=tunedElasticParams$x$s, y=tunedElasticParams$x$alpha, col="white") + 
+  theme_bw()
+
+# Not illustrative at all...
+plotHyperParsEffect(tunedElasticParamData, x="s", y="alpha", z="mse.test.mean", 
+                    #interpolate = "regr.kknn", 
+                    plot.type="scatter"
+                    #show.experiments = TRUE
+                    ) +
+  #scale_fill_gradientn(colours=terrain.colors(5)) + 
+  geom_point(x=tunedElasticParams$x$s, y=tunedElasticParams$x$alpha, col="white") + 
+  theme_bw()
+
+tunedElasticLearner <- setHyperPars(elasticLearner, par.vals = tunedElasticParams$x)
+tunedElasticModel <- train(tunedElasticLearner, task=iowaTask)
+tunedElasticModelData <- getLearnerModel(model=tunedElasticModel)
+tunedElasticCoefs <- coef(tunedElasticModelData, s=tunedElasticParams$x$s)
+coefTib$Elastic <- as.vector(tunedElasticCoefs)[-1]
+coefUntidy <- coefTib %>% gather(key="Model", value="Beta", -Coef)
+
+ggplot(coefUntidy, aes(x=reorder(Coef, Beta), y=Beta, fill=Model)) + 
+  geom_bar(stat="identity", col="black") + 
+  facet_wrap(~Model) + 
+  theme_bw() 
+
+library(plotmo)
+plotres(tunedRidgeModelData)
+plotres(tunedLassoModelData)
+plotres(tunedElasticModelData)
